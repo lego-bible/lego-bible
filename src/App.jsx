@@ -2,7 +2,7 @@ import React, { useState, useRef } from 'react';
 import { BookOpen, Copy, Trash2, Search, Edit3, Loader2, FileText, CheckCircle, Mic, Users, LayoutGrid } from 'lucide-react';
 
 // 실행 환경에서 API 키가 자동으로 주입됩니다.
-const apiKey = ""; 
+const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
 
 // API 호출 유틸리티 (지수 백오프 재시도 로직 포함)
 const fetchGeminiWithRetry = async (prompt, isJson = false) => {
