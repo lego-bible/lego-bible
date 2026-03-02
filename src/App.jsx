@@ -3,7 +3,6 @@ import { BookOpen, Copy, Trash2, Search, Edit3, Loader2, FileText, CheckCircle, 
 
 /**
  * 💡 환경 변수 안전하게 가져오기
- * Vite 환경에서 API 키를 가져올 때 발생할 수 있는 참조 에러를 방지하고 공백을 제거합니다.
  */
 const getApiKey = () => {
   try {
@@ -49,7 +48,8 @@ export default function App() {
   }, [errorMessage]);
 
   /**
-   * 🚀 Gemini API 호출 유틸리티 (v1 정식 엔드포인트 사용)
+   * 🚀 Gemini API 호출 유틸리티
+   * [중요] 구글 REST API는 반드시 snake_case 필드명을 사용해야 합니다.
    */
   const fetchGemini = async (prompt, isJson = false) => {
     if (!apiKey) {
@@ -57,21 +57,21 @@ export default function App() {
       return null;
     }
 
-    // 가장 안정적인 v1 엔드포인트와 gemini-1.5-flash 조합
+    // v1 정식 엔드포인트 사용
     const url = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
     
-    // 시스템 지침을 포함한 프롬프트 구성
     const systemInstruction = "당신은 깊이 있는 신학적 지식을 갖춘 전문 성경 학자이자 목회자입니다. 모든 답변은 한국어로 작성하며, 가독성 있게 단락을 구분하세요.";
     const fullPrompt = `${systemInstruction}\n\n요청사항: ${prompt}${isJson ? "\n\n반드시 결과는 다른 설명 없이 순수한 JSON 형식으로만 응답하세요." : ""}`;
 
+    // 🚨 400 Bad Request 해결: 모든 필드 이름을 snake_case로 엄격히 교정
     const payload = {
       contents: [{
         parts: [{ text: fullPrompt }]
       }],
-      generationConfig: {
+      generation_config: {
         temperature: 0.7,
-        maxOutputTokens: 4096,
-        ...(isJson ? { responseMimeType: "application/json" } : {})
+        max_output_tokens: 4096,
+        ...(isJson ? { response_mime_type: "application/json" } : {})
       }
     };
 
@@ -164,7 +164,6 @@ export default function App() {
     const result = await fetchGemini(prompt, false);
     if (result) {
       setOutputResult({ type: outputType, content: result });
-      // 생성 후 결과창으로 부드럽게 스크롤
       setTimeout(() => window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }), 300);
     }
     setIsGenerating(false);
@@ -189,7 +188,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#FDFBF7] text-slate-800 font-sans relative pb-24">
-      {/* --- 에러 알림 --- */}
       {errorMessage && (
         <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[100] w-[90%] max-w-lg animate-in slide-in-from-top-4">
           <div className="bg-red-600 text-white p-4 rounded-2xl shadow-2xl flex items-center space-x-3 border border-red-500">
@@ -200,7 +198,6 @@ export default function App() {
         </div>
       )}
 
-      {/* --- 배경 장식 --- */}
       <div className="fixed inset-0 pointer-events-none opacity-[0.03] overflow-hidden flex flex-wrap justify-center items-center z-0 text-3xl font-serif select-none">
         {Array(12).fill("בְּרֵ아שִׁית בָּרָא אֱלֹהִים אֵת הַשָּׁמַיִם וְאֵת הָאָרֶץ Ἐν ἀρχῇ ἦν ὁ λόγος ").join('')}
       </div>
@@ -215,7 +212,6 @@ export default function App() {
         </header>
 
         <div className="space-y-10">
-          {/* 1. 성경 본문 선택 섹션 */}
           <section className="bg-white p-8 rounded-[2rem] shadow-sm border border-amber-100">
             <h2 className="text-2xl font-bold text-amber-900 mb-6 flex items-center">
               <Search className="w-6 h-6 mr-3 text-amber-600" /> 1. 성경 본문 범위
@@ -244,7 +240,6 @@ export default function App() {
             </div>
           </section>
 
-          {/* 2. 본문 연구 결과 섹션 */}
           {researchData && (
             <section className="bg-white p-8 rounded-[2rem] shadow-sm border border-amber-100 animate-in fade-in slide-in-from-bottom-4 duration-500">
               <h2 className="text-2xl font-bold text-amber-900 mb-6 flex items-center">
@@ -267,7 +262,6 @@ export default function App() {
             </section>
           )}
 
-          {/* 3. 자료 제작 선택 섹션 */}
           {researchData && (
             <section ref={section3Ref} className="bg-white p-8 rounded-[2rem] shadow-sm border border-amber-100 animate-in fade-in slide-in-from-bottom-4 duration-500">
               <h2 className="text-2xl font-bold text-amber-900 mb-8">3. 생성할 사역 자료 선택</h2>
@@ -291,7 +285,6 @@ export default function App() {
             </section>
           )}
 
-          {/* 4. 최종 결과 출력 섹션 */}
           {outputResult && (
             <section className="bg-white rounded-[2.5rem] shadow-2xl border-4 border-amber-100 overflow-hidden animate-in zoom-in-95 duration-500">
               <div className="bg-amber-800 px-8 py-6 flex justify-between items-center text-white">
