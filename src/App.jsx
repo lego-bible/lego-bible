@@ -7,7 +7,7 @@ import { BookOpen, Copy, Trash2, Search, Edit3, Loader2, FileText, CheckCircle, 
 const getApiKey = () => {
   try {
     const env = import.meta.env;
-    const key = env ? env.VITE_GEMINI_API_KEY : "AIzaSyDOt2svILiU5sLr8jzwm6MJxOR3tO7j4HY";
+    const key = env ? env.VITE_GEMINI_API_KEY : "VITE_GEMINI_API_KEY";
     return key ? key.trim() : "";
   } catch (e) {
     return "";
@@ -18,26 +18,36 @@ const apiKey = getApiKey();
 
 /**
  * 🚀 Gemini API 호출 유틸리티
+ * 400 Bad Request를 방지하기 위해 가장 표준적인 v1 엔드포인트와 페이로드 구조를 사용합니다.
  */
 const fetchGeminiWithRetry = async (prompt, isJson = false) => {
   if (!apiKey) {
-    throw new Error("VITE_GEMINI_API_KEY가 설정되지 않았습니다. Vercel 환경 변수를 확인해주세요.");
+    throw new Error("API 키가 설정되지 않았습니다. Vercel 환경 변수를 확인해주세요.");
   }
 
-  // 가장 안정적인 v1beta 엔드포인트와 gemini-1.5-flash 모델 조합을 사용합니다.
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+  // 🚨 v1 정식 엔드포인트를 사용하여 안정성을 확보합니다.
+  const url = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
   
-  const systemPrompt = "당신은 깊이 있는 신학적 지식을 갖춘 전문 목회자이자 성경 학자입니다. 출력은 반드시 한국어로 작성하며, 단락을 명확히 구분하여 읽기 쉽게 만드세요.";
+  // 프롬프트 구성 (시스템 지침을 사용자 메시지에 통합하여 호환성 극대화)
+  const fullPrompt = isJson 
+    ? `${prompt}\n\n반드시 결과는 JSON 형식으로만 응답하세요.`
+    : `당신은 깊이 있는 신학적 지식을 갖춘 전문 성경 학자입니다. 모든 답변은 한국어로 작성하고 가독성 있게 구성하세요.\n\n요청사항: ${prompt}`;
 
   const payload = {
-    contents: [{ parts: [{ text: prompt }] }],
-    systemInstruction: { parts: [{ text: systemPrompt }] }
+    contents: [{ 
+      parts: [{ text: fullPrompt }] 
+    }],
+    generationConfig: {
+      temperature: 0.7,
+      topK: 40,
+      topP: 0.95,
+      maxOutputTokens: 4096,
+    }
   };
 
+  // JSON 모드가 필요할 때만 설정 추가
   if (isJson) {
-    payload.generationConfig = { 
-      responseMimeType: "application/json"
-    };
+    payload.generationConfig.responseMimeType = "application/json";
   }
 
   const delays = [1000, 2000, 4000, 8000, 16000];
@@ -51,30 +61,27 @@ const fetchGeminiWithRetry = async (prompt, isJson = false) => {
         body: JSON.stringify(payload)
       });
 
-      const errorData = await response.json().catch(() => ({}));
+      const responseData = await response.json();
 
       if (!response.ok) {
-        // 에러 발생 시 구글이 보내준 실제 상세 메시지를 콘솔에 출력합니다.
-        console.error("구글 API 에러 상세:", errorData);
-        
-        if (response.status === 404) {
-          throw new Error("모델을 찾을 수 없습니다(404). 모델 이름이나 API 권한을 확인하세요.");
-        }
+        console.error("구글 API 상세 에러:", responseData);
+        // API 키가 유효하지 않거나 권한이 없는 경우에 대한 메시지
         if (response.status === 400) {
-          throw new Error(`잘못된 요청(400): ${errorData.error?.message || '입력값을 확인하세요.'}`);
+          throw new Error(`잘못된 요청(400): ${responseData.error?.message || '입력 데이터 형식을 확인하세요.'}`);
         }
-        throw new Error(`HTTP error! status: ${response.status}, message: ${errorData.error?.message || 'Unknown error'}`);
+        if (response.status === 401 || response.status === 403) {
+          throw new Error("API 키 인증 실패: 키가 유효한지, 혹은 할당량이 만료되었는지 확인하세요.");
+        }
+        throw new Error(`API 오류 (${response.status}): ${responseData.error?.message || '알 수 없는 오류'}`);
       }
       
-      const text = errorData.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!text) throw new Error("응답에 텍스트가 포함되어 있지 않습니다.");
+      const text = responseData.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!text) throw new Error("응답 결과가 비어 있습니다.");
       return text;
       
     } catch (error) {
       lastError = error;
-      if (i < 4) {
-        await new Promise(res => setTimeout(res, delays[i]));
-      }
+      if (i < 4) await new Promise(res => setTimeout(res, delays[i]));
     }
   }
   
@@ -104,11 +111,11 @@ export default function App() {
 
   const handleResearch = async () => {
     if (!apiKey) {
-      alert("API 키가 없습니다. Vercel 환경 변수 설정을 확인해 주세요.");
+      alert("API 키가 설정되지 않았습니다.");
       return;
     }
     if (!book || !chapter || !startVerse || !endVerse) {
-      alert("성경책, 장, 절을 모두 입력해 주세요.");
+      alert("성경 본문 범위를 정확히 입력해 주세요.");
       return;
     }
 
@@ -119,22 +126,17 @@ export default function App() {
     
     const prompt = `
       성경 본문: ${book} ${chapter}장 ${startVerse}절 ~ ${endVerse}절
-      위 본문에 대한 연구 자료를 작성해 주세요.
-      반드시 아래와 같은 JSON 포맷으로만 응답하세요.
+      위 본문에 대해 다음 4가지 요소(역사적 배경, 문맥적 구조, 신학적 의미, 현대적 적용)를 포함한 연구 자료를 작성해 주세요.
+      결과는 반드시 아래의 JSON 스키마를 따르는 하나의 JSON 객체여야 합니다:
       {
-        "researchContent": "역사적 배경, 문맥, 신학적 의미, 적용점을 포함한 상세한 텍스트",
+        "researchContent": "상세한 연구 텍스트",
         "suggestedTopics": ["추천 주제 1", "추천 주제 2", "추천 주제 3"]
       }
     `;
 
     try {
       const result = await fetchGeminiWithRetry(prompt, true);
-      let parsed;
-      try {
-        parsed = JSON.parse(result);
-      } catch {
-        parsed = { researchContent: result, suggestedTopics: ["본문 메시지 연구"] };
-      }
+      const parsed = JSON.parse(result);
       setResearchData(parsed.researchContent);
       setSuggestedTopics(parsed.suggestedTopics || []);
     } catch (error) {
@@ -146,7 +148,7 @@ export default function App() {
 
   const handleGenerateOutput = async (outputType) => {
     if (!topic) {
-      alert("주제를 먼저 입력하거나 선택해 주세요.");
+      alert("주제를 입력하거나 선택해 주세요.");
       return;
     }
 
@@ -154,7 +156,7 @@ export default function App() {
     setActiveOutputTask(outputType);
     setOutputResult(null);
 
-    const prompt = `본문: ${book} ${chapter}:${startVerse}-${endVerse}\n주제: ${topic}\n형식: ${outputType}\n위 내용을 바탕으로 깊이 있는 내용을 작성해 주세요.`;
+    const prompt = `본문: ${book} ${chapter}:${startVerse}-${endVerse}\n주제: ${topic}\n형식: ${outputType}\n위 정보를 바탕으로 전문적인 사역 자료를 작성해 주세요.`;
 
     try {
       const result = await fetchGeminiWithRetry(prompt, false);
@@ -183,7 +185,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[#FDFBF7] text-slate-800 font-sans relative">
       <div className="fixed inset-0 pointer-events-none opacity-[0.03] overflow-hidden flex flex-wrap justify-center items-center z-0 text-3xl font-serif leading-loose p-4 select-none">
-        {Array(15).fill("בְּרֵאשִׁית בָּרָא אֱלֹהִים אֵת הַשָּׁמַיִם וְאֵת הָאָרֶץ Ἐν ἀρχῇ ἦν ὁ λόγος ").join('')}
+        {Array(10).fill("בְּרֵאשִׁית בָּרָא אֱלֹהִים אֵת הַשָּׁמַיִם וְאֵת הָאָרֶץ ").join('')}
       </div>
 
       <div className="relative z-10 max-w-5xl mx-auto px-4 py-12">
@@ -192,31 +194,31 @@ export default function App() {
             <BookOpen className="w-10 h-10 text-amber-700" />
             <h1 className="text-4xl font-black text-amber-900 tracking-tighter uppercase">Lego Bible</h1>
           </div>
-          <p className="text-amber-800/60 font-medium">성경 연구의 모든 조각을 하나로</p>
+          <p className="text-amber-800/60 font-medium">말씀 연구의 조각을 맞추다</p>
         </header>
 
         <div className="space-y-8">
-          <section className="bg-white p-6 rounded-2xl shadow-sm border border-amber-100">
+          <section className="bg-white p-6 rounded-3xl shadow-sm border border-amber-100">
             <h2 className="text-xl font-bold text-amber-800 mb-4 flex items-center">
               <Search className="w-5 h-5 mr-2" /> 1. 본문 범위 설정
             </h2>
             <div className="flex flex-wrap items-end gap-4">
               <div className="flex-1 min-w-[150px]">
-                <label className="block text-xs font-bold text-slate-400 mb-1">성경</label>
-                <input type="text" className="w-full p-3 bg-slate-50 border rounded-xl focus:ring-2 focus:ring-amber-500 outline-none" value={book} onChange={e => setBook(e.target.value)} placeholder="예: 창세기"/>
+                <label className="block text-xs font-bold text-slate-400 mb-1 uppercase tracking-wider">Bible Book</label>
+                <input type="text" className="w-full p-3 bg-slate-50 border-0 rounded-xl focus:ring-2 focus:ring-amber-500 outline-none" value={book} onChange={e => setBook(e.target.value)} placeholder="예: 요한복음"/>
               </div>
               <div className="w-20">
-                <label className="block text-xs font-bold text-slate-400 mb-1">장</label>
-                <input type="number" className="w-full p-3 bg-slate-50 border rounded-xl" value={chapter} onChange={e => setChapter(e.target.value)}/>
+                <label className="block text-xs font-bold text-slate-400 mb-1 uppercase tracking-wider">Chapter</label>
+                <input type="number" className="w-full p-3 bg-slate-50 border-0 rounded-xl outline-none" value={chapter} onChange={e => setChapter(e.target.value)}/>
               </div>
               <div className="w-20">
-                <label className="block text-xs font-bold text-slate-400 mb-1">시작</label>
-                <input type="number" className="w-full p-3 bg-slate-50 border rounded-xl" value={startVerse} onChange={e => setStartVerse(e.target.value)}/>
+                <label className="block text-xs font-bold text-slate-400 mb-1 uppercase tracking-wider">Start</label>
+                <input type="number" className="w-full p-3 bg-slate-50 border-0 rounded-xl outline-none" value={startVerse} onChange={e => setStartVerse(e.target.value)}/>
               </div>
               <div className="pb-4 text-slate-300">~</div>
               <div className="w-20">
-                <label className="block text-xs font-bold text-slate-400 mb-1">끝</label>
-                <input type="number" className="w-full p-3 bg-slate-50 border rounded-xl" value={endVerse} onChange={e => setEndVerse(e.target.value)}/>
+                <label className="block text-xs font-bold text-slate-400 mb-1 uppercase tracking-wider">End</label>
+                <input type="number" className="w-full p-3 bg-slate-50 border-0 rounded-xl outline-none" value={endVerse} onChange={e => setEndVerse(e.target.value)}/>
               </div>
               <button onClick={handleResearch} disabled={isResearching} className="px-8 py-3.5 bg-amber-700 hover:bg-amber-800 text-white rounded-xl font-bold transition-all disabled:opacity-50">
                 {isResearching ? '연구 중...' : '연구 자료 찾기'}
@@ -225,19 +227,19 @@ export default function App() {
           </section>
 
           {researchData && (
-            <section className="bg-white p-6 rounded-2xl shadow-sm border border-amber-100 animate-in fade-in slide-in-from-bottom-2">
+            <section className="bg-white p-6 rounded-3xl shadow-sm border border-amber-100">
               <h2 className="text-xl font-bold text-amber-800 mb-4 flex items-center">
                 <FileText className="w-5 h-5 mr-2" /> 2. 연구 분석 내용
               </h2>
-              <div className="prose max-w-none bg-amber-50/30 p-6 rounded-2xl border border-amber-100 whitespace-pre-wrap text-slate-700 leading-relaxed">
+              <div className="prose max-w-none bg-amber-50/30 p-8 rounded-3xl border border-amber-100 whitespace-pre-wrap text-slate-700 leading-relaxed">
                 {researchData}
               </div>
               <div className="mt-8 pt-6 border-t border-slate-100">
                 <h3 className="text-lg font-bold text-amber-800 mb-3 flex items-center"><Edit3 className="w-5 h-5 mr-2" /> 주제 선택 및 입력</h3>
-                <input type="text" className="w-full p-4 bg-slate-50 border rounded-xl outline-none focus:ring-2 focus:ring-amber-500" value={topic} onChange={e => setTopic(e.target.value)} placeholder="원하는 주제를 입력하세요."/>
+                <input type="text" className="w-full p-4 bg-slate-50 border-0 rounded-xl outline-none focus:ring-2 focus:ring-amber-500" value={topic} onChange={e => setTopic(e.target.value)} placeholder="원하는 주제를 입력하세요."/>
                 <div className="mt-4 flex flex-wrap gap-2">
                   {suggestedTopics.map((t, i) => (
-                    <button key={i} onClick={() => setTopic(t)} className="px-4 py-2 bg-white border border-amber-200 rounded-full text-sm font-semibold text-amber-900 hover:bg-amber-50">
+                    <button key={i} onClick={() => setTopic(t)} className="px-4 py-2 bg-white border border-amber-200 rounded-full text-sm font-semibold text-amber-900 hover:bg-amber-100 transition-colors">
                       {t}
                     </button>
                   ))}
@@ -247,7 +249,7 @@ export default function App() {
           )}
 
           {researchData && (
-            <section ref={section3Ref} className="bg-white p-6 rounded-2xl shadow-sm border border-amber-100">
+            <section ref={section3Ref} className="bg-white p-6 rounded-3xl shadow-sm border border-amber-100">
               <h2 className="text-xl font-bold text-amber-800 mb-6">3. 생성할 사역 자료 선택</h2>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 {[
@@ -270,7 +272,7 @@ export default function App() {
           )}
 
           {outputResult && (
-            <section className="bg-white rounded-3xl shadow-xl border border-amber-200 overflow-hidden animate-in zoom-in-95">
+            <section className="bg-white rounded-3xl shadow-xl border border-amber-200 overflow-hidden">
               <div className="bg-amber-700 px-6 py-4 flex justify-between items-center">
                 <h2 className="text-lg font-bold text-white flex items-center"><CheckCircle className="w-5 h-5 mr-2" /> {outputResult.type} 완료</h2>
                 <div className="flex gap-2">
