@@ -1,13 +1,14 @@
-import React, { useState, useRef } from 'react';
-import { BookOpen, Copy, Trash2, Search, Edit3, Loader2, FileText, CheckCircle, Mic, Users, LayoutGrid } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { BookOpen, Copy, Trash2, Search, Edit3, Loader2, FileText, CheckCircle, Mic, Users, LayoutGrid, AlertCircle } from 'lucide-react';
 
 /**
  * 💡 환경 변수 안전하게 가져오기
+ * Vite 환경에서 API 키를 가져올 때 발생할 수 있는 참조 에러를 방지하고 공백을 제거합니다.
  */
 const getApiKey = () => {
   try {
     const env = import.meta.env;
-    const key = env ? env.VITE_GEMINI_API_KEY : "AIzaSyAN3dEru7azCmgY4oW6R9RUefjmG0m4XwQ";
+    const key = env ? env.VITE_GEMINI_API_KEY : "AIzaSyDFexMx5okGxLNIaeITJ5sBPQfzdVMTdYM";
     return key ? key.trim() : "";
   } catch (e) {
     return "";
@@ -16,88 +17,8 @@ const getApiKey = () => {
 
 const apiKey = getApiKey();
 
-/**
- * 🚀 Gemini API 호출 유틸리티
- * 400 Bad Request를 완벽히 해결하기 위해 가장 표준적인 v1beta 구조를 사용합니다.
- */
-const fetchGeminiWithRetry = async (prompt, isJson = false) => {
-  if (!apiKey) {
-    throw new Error("API 키가 설정되지 않았습니다. Vercel 환경 변수(VITE_GEMINI_API_KEY)를 확인해주세요.");
-  }
-
-  // JSON 모드 안정성을 위해 v1beta 엔드포인트를 사용합니다.
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
-  
-  // 프롬프트 구성
-  const fullPrompt = isJson 
-    ? `${prompt}\n\n결과는 반드시 다른 설명 없이 순수한 JSON 데이터 형식으로만 응답하세요.`
-    : `당신은 전문적인 성경 학자이자 목회자입니다. 깊이 있는 신학적 통찰을 바탕으로 한국어로 답변하세요.\n\n요청사항: ${prompt}`;
-
-  // 🚨 400 에러 방지를 위한 표준 페이로드 구조
-  const payload = {
-    contents: [
-      {
-        role: "user",
-        parts: [{ text: fullPrompt }]
-      }
-    ],
-    generationConfig: {
-      temperature: 0.7,
-      maxOutputTokens: 4096,
-    }
-  };
-
-  // JSON 모드가 필요한 경우 스키마 설정 대신 MIME 타입만 지정 (가장 호환성 높음)
-  if (isJson) {
-    payload.generationConfig.responseMimeType = "application/json";
-  }
-
-  const delays = [1000, 2000, 4000, 8000, 16000];
-  let lastError = null;
-
-  for (let i = 0; i < 5; i++) {
-    try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-
-      const responseData = await response.json();
-
-      if (!response.ok) {
-        console.error("Google API Error Detail:", responseData);
-        // 구글 서버가 보내주는 진짜 에러 메시지를 추출합니다.
-        const errorMessage = responseData.error?.message || "알 수 없는 오류가 발생했습니다.";
-        
-        if (response.status === 400) {
-          throw new Error(`잘못된 요청(400): ${errorMessage}`);
-        }
-        if (response.status === 429) {
-          throw new Error("사용량 초과(429): 잠시 후 다시 시도해주세요.");
-        }
-        throw new Error(`API 오류 (${response.status}): ${errorMessage}`);
-      }
-      
-      const text = responseData.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!text) throw new Error("응답 결과가 비어 있습니다.");
-      return text;
-      
-    } catch (error) {
-      lastError = error;
-      // 네트워크 에러나 500번대 에러일 때만 재시도
-      if (i < 4 && (error.message.includes('50') || error.message.includes('Failed to fetch'))) {
-        await new Promise(res => setTimeout(res, delays[i]));
-      } else {
-        break; // 400번대 에러는 재시도하지 않고 즉시 중단
-      }
-    }
-  }
-  
-  throw lastError;
-};
-
 export default function App() {
+  // --- 상태 관리 ---
   const [book, setBook] = useState('');
   const [chapter, setChapter] = useState('');
   const [startVerse, setStartVerse] = useState('');
@@ -115,12 +36,77 @@ export default function App() {
   
   const [copiedTop, setCopiedTop] = useState(false);
   const [copiedBottom, setCopiedBottom] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
 
   const section3Ref = useRef(null);
 
+  // 에러 메시지 5초 후 자동 삭제
+  useEffect(() => {
+    if (errorMessage) {
+      const timer = setTimeout(() => setErrorMessage(""), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [errorMessage]);
+
+  /**
+   * 🚀 Gemini API 호출 유틸리티 (v1 정식 엔드포인트 사용)
+   */
+  const fetchGemini = async (prompt, isJson = false) => {
+    if (!apiKey) {
+      setErrorMessage("API 키가 설정되지 않았습니다. Vercel 환경 변수를 확인해주세요.");
+      return null;
+    }
+
+    // 가장 안정적인 v1 엔드포인트와 gemini-1.5-flash 조합
+    const url = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+    
+    // 시스템 지침을 포함한 프롬프트 구성
+    const systemInstruction = "당신은 깊이 있는 신학적 지식을 갖춘 전문 성경 학자이자 목회자입니다. 모든 답변은 한국어로 작성하며, 가독성 있게 단락을 구분하세요.";
+    const fullPrompt = `${systemInstruction}\n\n요청사항: ${prompt}${isJson ? "\n\n반드시 결과는 다른 설명 없이 순수한 JSON 형식으로만 응답하세요." : ""}`;
+
+    const payload = {
+      contents: [{
+        parts: [{ text: fullPrompt }]
+      }],
+      generationConfig: {
+        temperature: 0.7,
+        maxOutputTokens: 4096,
+        ...(isJson ? { responseMimeType: "application/json" } : {})
+      }
+    };
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        console.error("API Error Response:", data);
+        const msg = data.error?.message || "알 수 없는 API 오류";
+        throw new Error(`[${response.status}] ${msg}`);
+      }
+      
+      const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!text) throw new Error("응답 결과가 비어 있습니다.");
+      return text;
+      
+    } catch (error) {
+      console.error("Fetch Error:", error);
+      setErrorMessage(error.message);
+      return null;
+    }
+  };
+
+  /**
+   * 🔍 1단계: 본문 연구 실행
+   */
   const handleResearch = async () => {
     if (!book || !chapter || !startVerse || !endVerse) {
-      alert("성경 본문을 입력해 주세요.");
+      setErrorMessage("성경 본문 정보(책, 장, 절)를 모두 입력해 주세요.");
       return;
     }
 
@@ -131,29 +117,34 @@ export default function App() {
     
     const prompt = `
       성경 본문: ${book} ${chapter}장 ${startVerse}절 ~ ${endVerse}절
-      위 본문을 (1)역사적 배경 (2)문맥과 구조 (3)핵심 단어와 신학 (4)현대적 적용의 순서로 분석하세요.
-      반드시 아래 JSON 형식을 지키세요:
+      위 본문을 (1)역사적 배경 (2)문맥 및 구조 (3)핵심 단어와 신학 (4)현대적 적용점으로 나누어 매우 상세히 분석해 주세요.
+      결과는 반드시 아래 JSON 형식을 지켜야 합니다:
       {
-        "researchContent": "분석 텍스트 내용",
-        "suggestedTopics": ["주제1", "주제2", "주제3"]
+        "researchContent": "상세 분석 텍스트",
+        "suggestedTopics": ["본문 기반 추천 주제 1", "본문 기반 추천 주제 2", "본문 기반 추천 주제 3"]
       }
     `;
 
-    try {
-      const result = await fetchGeminiWithRetry(prompt, true);
-      const parsed = JSON.parse(result);
-      setResearchData(parsed.researchContent);
-      setSuggestedTopics(parsed.suggestedTopics || []);
-    } catch (error) {
-      alert(`연구 실패: ${error.message}`);
-    } finally {
-      setIsResearching(false);
+    const result = await fetchGemini(prompt, true);
+    if (result) {
+      try {
+        const parsed = JSON.parse(result);
+        setResearchData(parsed.researchContent);
+        setSuggestedTopics(parsed.suggestedTopics || []);
+      } catch (e) {
+        setResearchData(result);
+        setSuggestedTopics(["본문의 핵심 메시지"]);
+      }
     }
+    setIsResearching(false);
   };
 
+  /**
+   * 📝 2단계: 결과물(설교문 등) 생성 실행
+   */
   const handleGenerateOutput = async (outputType) => {
     if (!topic) {
-      alert("주제를 선택해 주세요.");
+      setErrorMessage("주제를 먼저 입력하거나 추천 주제를 선택해 주세요.");
       return;
     }
 
@@ -161,18 +152,23 @@ export default function App() {
     setActiveOutputTask(outputType);
     setOutputResult(null);
 
-    const prompt = `본문: ${book} ${chapter}:${startVerse}-${endVerse}\n주제: ${topic}\n형식: ${outputType}\n위 내용을 바탕으로 풍성한 사역 자료를 작성하세요.`;
+    const prompt = `
+      성경 본문: ${book} ${chapter}:${startVerse}-${endVerse}
+      선택한 주제: ${topic}
+      제작할 형식: ${outputType}
 
-    try {
-      const result = await fetchGeminiWithRetry(prompt, false);
+      위 정보를 바탕으로 전문적인 ${outputType}를 작성해 주세요. 
+      구성은 서론, 본론(대지 3개 이상), 결론, 나눔을 위한 질문을 포함해야 하며 깊이 있는 신학적 통찰을 담아주세요.
+    `;
+
+    const result = await fetchGemini(prompt, false);
+    if (result) {
       setOutputResult({ type: outputType, content: result });
+      // 생성 후 결과창으로 부드럽게 스크롤
       setTimeout(() => window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }), 300);
-    } catch (error) {
-      alert(`생성 실패: ${error.message}`);
-    } finally {
-      setIsGenerating(false);
-      setActiveOutputTask('');
     }
+    setIsGenerating(false);
+    setActiveOutputTask('');
   };
 
   const handleCopy = (pos) => {
@@ -181,70 +177,88 @@ export default function App() {
     el.value = outputResult.content;
     document.body.appendChild(el);
     el.select();
-    document.execCommand('copy');
+    try {
+      document.execCommand('copy');
+      if (pos === 'top') { setCopiedTop(true); setTimeout(() => setCopiedTop(false), 2000); }
+      else { setCopiedBottom(true); setTimeout(() => setCopiedBottom(false), 2000); }
+    } catch (err) {
+      setErrorMessage("복사에 실패했습니다.");
+    }
     document.body.removeChild(el);
-    if (pos === 'top') { setCopiedTop(true); setTimeout(() => setCopiedTop(false), 2000); }
-    else { setCopiedBottom(true); setTimeout(() => setCopiedBottom(false), 2000); }
   };
 
   return (
-    <div className="min-h-screen bg-[#FDFBF7] text-slate-800 font-sans relative">
+    <div className="min-h-screen bg-[#FDFBF7] text-slate-800 font-sans relative pb-24">
+      {/* --- 에러 알림 --- */}
+      {errorMessage && (
+        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[100] w-[90%] max-w-lg animate-in slide-in-from-top-4">
+          <div className="bg-red-600 text-white p-4 rounded-2xl shadow-2xl flex items-center space-x-3 border border-red-500">
+            <AlertCircle className="w-6 h-6 flex-shrink-0" />
+            <p className="text-sm font-semibold flex-1">{errorMessage}</p>
+            <button onClick={() => setErrorMessage("")} className="p-1 hover:bg-white/20 rounded-lg transition-colors">✕</button>
+          </div>
+        </div>
+      )}
+
+      {/* --- 배경 장식 --- */}
       <div className="fixed inset-0 pointer-events-none opacity-[0.03] overflow-hidden flex flex-wrap justify-center items-center z-0 text-3xl font-serif select-none">
-        {Array(10).fill("בְּרֵאשִׁית בָּרָא אֱלֹהִים אֵת הַשָּׁמַיִם וְאֵת הָאָרֶץ ").join('')}
+        {Array(12).fill("בְּרֵ아שִׁית בָּרָא אֱלֹהִים אֵת הַשָּׁמַיִם וְאֵת הָאָרֶץ Ἐν ἀρχῇ ἦν ὁ λόγος ").join('')}
       </div>
 
-      <div className="relative z-10 max-w-5xl mx-auto px-4 py-12">
-        <header className="flex flex-col items-center mb-12 space-y-2">
+      <div className="relative z-10 max-w-5xl mx-auto px-4 py-16">
+        <header className="flex flex-col items-center mb-16 space-y-3">
           <div className="flex items-center space-x-4">
-            <BookOpen className="w-10 h-10 text-amber-700" />
-            <h1 className="text-4xl font-black text-amber-900 tracking-tighter uppercase">Lego Bible</h1>
+            <BookOpen className="w-12 h-12 text-amber-700" />
+            <h1 className="text-5xl font-black text-amber-900 tracking-tighter uppercase italic">Lego Bible</h1>
           </div>
-          <p className="text-amber-800/60 font-medium italic">성경 연구의 조각들을 연결하여 풍성한 사역으로</p>
+          <p className="text-amber-800/60 font-bold tracking-widest text-sm uppercase">말씀 연구와 사역 자료의 완성을 위한 조각</p>
         </header>
 
-        <div className="space-y-8">
-          <section className="bg-white p-6 rounded-3xl shadow-sm border border-amber-100">
-            <h2 className="text-xl font-bold text-amber-800 mb-4 flex items-center">
-              <Search className="w-5 h-5 mr-2" /> 1. 본문 선택
+        <div className="space-y-10">
+          {/* 1. 성경 본문 선택 섹션 */}
+          <section className="bg-white p-8 rounded-[2rem] shadow-sm border border-amber-100">
+            <h2 className="text-2xl font-bold text-amber-900 mb-6 flex items-center">
+              <Search className="w-6 h-6 mr-3 text-amber-600" /> 1. 성경 본문 범위
             </h2>
-            <div className="flex flex-wrap items-end gap-4">
-              <div className="flex-1 min-w-[150px]">
-                <label className="block text-xs font-bold text-slate-400 mb-1">성경책</label>
-                <input type="text" className="w-full p-3 bg-slate-50 border rounded-xl outline-none" value={book} onChange={e => setBook(e.target.value)} placeholder="예: 로마서"/>
+            <div className="flex flex-wrap items-end gap-5">
+              <div className="flex-1 min-w-[180px]">
+                <label className="block text-xs font-black text-slate-400 mb-2 uppercase tracking-widest">Bible Book</label>
+                <input type="text" className="w-full p-4 bg-slate-50 border-0 rounded-2xl focus:ring-2 focus:ring-amber-500 outline-none text-lg font-medium" value={book} onChange={e => setBook(e.target.value)} placeholder="예: 로마서"/>
               </div>
-              <div className="w-20">
-                <label className="block text-xs font-bold text-slate-400 mb-1">장</label>
-                <input type="number" className="w-full p-3 bg-slate-50 border rounded-xl" value={chapter} onChange={e => setChapter(e.target.value)}/>
+              <div className="w-24">
+                <label className="block text-xs font-black text-slate-400 mb-2 uppercase tracking-widest">Chap</label>
+                <input type="number" className="w-full p-4 bg-slate-50 border-0 rounded-2xl outline-none text-lg font-medium" value={chapter} onChange={e => setChapter(e.target.value)}/>
               </div>
-              <div className="w-20">
-                <label className="block text-xs font-bold text-slate-400 mb-1">시작</label>
-                <input type="number" className="w-full p-3 bg-slate-50 border rounded-xl" value={startVerse} onChange={e => setStartVerse(e.target.value)}/>
+              <div className="w-24">
+                <label className="block text-xs font-black text-slate-400 mb-2 uppercase tracking-widest">Start</label>
+                <input type="number" className="w-full p-4 bg-slate-50 border-0 rounded-2xl outline-none text-lg font-medium" value={startVerse} onChange={e => setStartVerse(e.target.value)}/>
               </div>
-              <div className="pb-4 text-slate-300">~</div>
-              <div className="w-20">
-                <label className="block text-xs font-bold text-slate-400 mb-1">끝</label>
-                <input type="number" className="w-full p-3 bg-slate-50 border rounded-xl" value={endVerse} onChange={e => setEndVerse(e.target.value)}/>
+              <div className="pb-5 text-slate-300 font-black text-xl">~</div>
+              <div className="w-24">
+                <label className="block text-xs font-black text-slate-400 mb-2 uppercase tracking-widest">End</label>
+                <input type="number" className="w-full p-4 bg-slate-50 border-0 rounded-2xl outline-none text-lg font-medium" value={endVerse} onChange={e => setEndVerse(e.target.value)}/>
               </div>
-              <button onClick={handleResearch} disabled={isResearching} className="px-8 py-3.5 bg-amber-700 text-white rounded-xl font-bold hover:bg-amber-800 transition-all disabled:opacity-50">
-                {isResearching ? '연구 중...' : '연구 시작'}
+              <button onClick={handleResearch} disabled={isResearching} className="px-10 py-4 bg-amber-700 hover:bg-amber-800 text-white rounded-2xl font-black text-lg transition-all shadow-lg hover:shadow-amber-200 disabled:opacity-50 active:scale-95">
+                {isResearching ? <Loader2 className="w-6 h-6 animate-spin" /> : '연구 시작'}
               </button>
             </div>
           </section>
 
+          {/* 2. 본문 연구 결과 섹션 */}
           {researchData && (
-            <section className="bg-white p-6 rounded-3xl shadow-sm border border-amber-100 animate-in fade-in slide-in-from-bottom-2">
-              <h2 className="text-xl font-bold text-amber-800 mb-4 flex items-center">
-                <FileText className="w-5 h-5 mr-2" /> 2. 연구 분석
+            <section className="bg-white p-8 rounded-[2rem] shadow-sm border border-amber-100 animate-in fade-in slide-in-from-bottom-4 duration-500">
+              <h2 className="text-2xl font-bold text-amber-900 mb-6 flex items-center">
+                <FileText className="w-6 h-6 mr-3 text-amber-600" /> 2. 연구 분석 결과
               </h2>
-              <div className="prose max-w-none bg-amber-50/30 p-8 rounded-3xl border border-amber-100 whitespace-pre-wrap text-slate-700 leading-relaxed">
+              <div className="prose max-w-none bg-amber-50/30 p-10 rounded-[2rem] border border-amber-100 whitespace-pre-wrap text-slate-700 leading-relaxed text-lg">
                 {researchData}
               </div>
-              <div className="mt-8 pt-6 border-t border-slate-100">
-                <h3 className="text-lg font-bold text-amber-800 mb-3">주제 선택</h3>
-                <input type="text" className="w-full p-4 bg-slate-50 border rounded-xl outline-none" value={topic} onChange={e => setTopic(e.target.value)} placeholder="주제를 직접 쓰거나 아래 버튼을 누르세요."/>
-                <div className="mt-4 flex flex-wrap gap-2">
+              <div className="mt-10 pt-8 border-t border-slate-100">
+                <h3 className="text-xl font-bold text-amber-900 mb-4 flex items-center"><Edit3 className="w-6 h-6 mr-3 text-amber-600" /> 사역 주제 선택</h3>
+                <input type="text" className="w-full p-5 bg-slate-50 border-0 rounded-2xl outline-none focus:ring-2 focus:ring-amber-500 text-lg" value={topic} onChange={e => setTopic(e.target.value)} placeholder="원하는 사역 주제를 입력하거나 아래 추천 항목을 선택하세요."/>
+                <div className="mt-5 flex flex-wrap gap-3">
                   {suggestedTopics.map((t, i) => (
-                    <button key={i} onClick={() => setTopic(t)} className="px-4 py-2 bg-white border border-amber-200 rounded-full text-sm font-semibold text-amber-900 hover:bg-amber-50">
+                    <button key={i} onClick={() => setTopic(t)} className="px-5 py-2.5 bg-white border-2 border-amber-100 rounded-full text-sm font-bold text-amber-900 hover:bg-amber-100 hover:border-amber-300 transition-all shadow-sm">
                       {t}
                     </button>
                   ))}
@@ -253,16 +267,23 @@ export default function App() {
             </section>
           )}
 
+          {/* 3. 자료 제작 선택 섹션 */}
           {researchData && (
-            <section ref={section3Ref} className="bg-white p-6 rounded-3xl shadow-sm border border-amber-100">
-              <h2 className="text-xl font-bold text-amber-800 mb-6">3. 사역 자료 생성</h2>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                {['설교문', '성경 공부교재', '비블리오드라마 교재', '공동체 활동 교재'].map((type) => {
+            <section ref={section3Ref} className="bg-white p-8 rounded-[2rem] shadow-sm border border-amber-100 animate-in fade-in slide-in-from-bottom-4 duration-500">
+              <h2 className="text-2xl font-bold text-amber-900 mb-8">3. 생성할 사역 자료 선택</h2>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                {[
+                  { type: '설교문', icon: Mic, desc: '신학적 강해 및 메시지' },
+                  { type: '성경 공부교재', icon: FileText, desc: '소그룹 나눔과 질문지' },
+                  { type: '비블리오드라마 교재', icon: Users, desc: '입체적 성경 체험 가이드' },
+                  { type: '공동체 활동 교재', icon: LayoutGrid, desc: '적용 중심의 활동 프로그램' }
+                ].map(({ type, icon: Icon, desc }) => {
                   const isActive = activeOutputTask === type;
                   return (
-                    <button key={type} onClick={() => handleGenerateOutput(type)} disabled={!topic || isGenerating} className={`p-6 flex flex-col items-center rounded-2xl border-2 transition-all ${isActive ? 'border-amber-600 bg-amber-50' : 'border-slate-50 hover:border-amber-300'}`}>
-                      {isActive ? <Loader2 className="w-8 h-8 mb-2 animate-spin text-amber-600" /> : <Edit3 className="w-8 h-8 mb-2 text-amber-700" />}
-                      <span className="font-bold text-sm">{type}</span>
+                    <button key={type} onClick={() => handleGenerateOutput(type)} disabled={!topic || isGenerating} className={`p-8 flex flex-col items-center text-center rounded-[2rem] border-4 transition-all duration-300 ${isActive ? 'border-amber-600 bg-amber-50 shadow-inner' : 'border-slate-50 bg-white hover:border-amber-400 hover:shadow-xl hover:-translate-y-1'}`}>
+                      {isActive ? <Loader2 className="w-12 h-12 mb-4 animate-spin text-amber-600" /> : <Icon className="w-12 h-12 mb-4 text-amber-700" />}
+                      <span className="font-black text-xl mb-2">{type}</span>
+                      <span className="text-xs font-bold text-slate-400 leading-tight">{desc}</span>
                     </button>
                   );
                 })}
@@ -270,17 +291,23 @@ export default function App() {
             </section>
           )}
 
+          {/* 4. 최종 결과 출력 섹션 */}
           {outputResult && (
-            <section className="bg-white rounded-3xl shadow-xl border border-amber-200 overflow-hidden animate-in zoom-in-95">
-              <div className="bg-amber-700 px-6 py-4 flex justify-between items-center text-white">
-                <h2 className="font-bold">{outputResult.type} 완료</h2>
-                <div className="flex gap-2">
-                  <button onClick={() => setOutputResult(null)} className="px-3 py-1 bg-amber-800 rounded text-xs">삭제</button>
-                  <button onClick={() => handleCopy('top')} className="px-3 py-1 bg-white text-amber-900 rounded text-xs font-bold">{copiedTop ? '복사 완료' : '텍스트 복사'}</button>
+            <section className="bg-white rounded-[2.5rem] shadow-2xl border-4 border-amber-100 overflow-hidden animate-in zoom-in-95 duration-500">
+              <div className="bg-amber-800 px-8 py-6 flex justify-between items-center text-white">
+                <h2 className="text-xl font-black flex items-center"><CheckCircle className="w-6 h-6 mr-3 text-amber-300" /> {outputResult.type} 생성 완료</h2>
+                <div className="flex gap-3">
+                  <button onClick={() => setOutputResult(null)} className="px-5 py-2 bg-amber-900/50 rounded-xl text-xs font-black hover:bg-red-600 transition-colors uppercase">Delete</button>
+                  <button onClick={() => handleCopy('top')} className="px-5 py-2 bg-white text-amber-900 rounded-xl text-xs font-black hover:bg-amber-50 transition-colors uppercase">{copiedTop ? 'Copied!' : 'Copy Text'}</button>
                 </div>
               </div>
-              <div className="p-8 prose max-w-none whitespace-pre-wrap text-slate-800">
+              <div className="p-12 prose prose-amber max-w-none whitespace-pre-wrap text-xl leading-[1.8] text-slate-800 font-medium">
                 {outputResult.content}
+              </div>
+              <div className="bg-amber-50 px-8 py-6 border-t border-amber-100 flex justify-end">
+                <button onClick={() => handleCopy('bottom')} className="px-8 py-3 bg-amber-700 text-white rounded-xl font-black hover:bg-amber-800 transition-all shadow-md active:scale-95">
+                  {copiedBottom ? '클립보드 복사 완료' : '전체 내용 복사하기'}
+                </button>
               </div>
             </section>
           )}
