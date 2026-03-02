@@ -1,12 +1,22 @@
 import React, { useState, useRef } from 'react';
 import { BookOpen, Copy, Trash2, Search, Edit3, Loader2, FileText, CheckCircle, Mic, Users, LayoutGrid } from 'lucide-react';
 
-// 실행 환경에서 API 키가 자동으로 주입됩니다.
-const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+// Vercel 환경 변수 및 환경에 따른 API 키 접근 방식 최적화
+// 빌드 타겟 환경(es2015 등)에 따른 import.meta 호환성 문제를 해결하기 위해 안전하게 접근합니다.
+const getApiKey = () => {
+  try {
+    return import.meta.env.VITE_GEMINI_API_KEY || "";
+  } catch (e) {
+    return "";
+  }
+};
+
+const apiKey = getApiKey();
 
 // API 호출 유틸리티 (지수 백오프 재시도 로직 포함)
 const fetchGeminiWithRetry = async (prompt, isJson = false) => {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+  // 정식 서비스 모델인 'gemini-1.5-flash' 사용
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
   
   const systemPrompt = "당신은 깊이 있는 신학적 지식을 갖춘 전문 목회자이자 성경 학자입니다. 출력은 반드시 한국어로 작성하며, 단락을 명확히 구분하여 읽기 쉽게 만드세요.";
 
@@ -16,7 +26,9 @@ const fetchGeminiWithRetry = async (prompt, isJson = false) => {
   };
 
   if (isJson) {
-    payload.generationConfig = { responseMimeType: "application/json" };
+    payload.generationConfig = { 
+      responseMimeType: "application/json"
+    };
   }
 
   const delays = [1000, 2000, 4000, 8000, 16000];
@@ -31,13 +43,14 @@ const fetchGeminiWithRetry = async (prompt, isJson = false) => {
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        const errorData = await response.json();
+        throw new Error(`HTTP error! status: ${response.status}, message: ${errorData.error?.message || 'Unknown error'}`);
       }
       
       const data = await response.json();
       const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
       
-      if (!text) throw new Error("No text in response");
+      if (!text) throw new Error("응답에 텍스트가 포함되어 있지 않습니다.");
       return text;
       
     } catch (error) {
@@ -48,7 +61,6 @@ const fetchGeminiWithRetry = async (prompt, isJson = false) => {
     }
   }
   
-  alert("일시적인 네트워크 오류이거나 응답 지연입니다. 잠시 후 다시 시도해주세요.");
   throw lastError;
 };
 
@@ -74,6 +86,10 @@ export default function App() {
   const section3Ref = useRef(null);
 
   const handleResearch = async () => {
+    if (!apiKey) {
+      alert("VITE_GEMINI_API_KEY가 설정되지 않았습니다. Vercel 환경 변수를 확인해주세요.");
+      return;
+    }
     if (!book || !chapter || !startVerse || !endVerse) {
       alert("성경책, 장, 절을 모두 입력해주세요.");
       return;
@@ -111,6 +127,7 @@ export default function App() {
       setSuggestedTopics(parsed.suggestedTopics || []);
     } catch (error) {
       console.error("연구 실패:", error);
+      alert("연구 자료를 가져오는 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.");
     } finally {
       setIsResearching(false);
     }
@@ -150,6 +167,7 @@ export default function App() {
       
     } catch (error) {
       console.error("생성 실패:", error);
+      alert("결과물 생성 중 오류가 발생했습니다.");
     } finally {
       setIsGenerating(false);
       setActiveOutputTask('');
@@ -179,14 +197,18 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#FDFBF7] text-slate-800 font-sans relative">
-      <div className="fixed inset-0 pointer-events-none opacity-[0.03] overflow-hidden flex flex-wrap justify-center items-center z-0 text-3xl font-serif leading-loose break-all p-4">
+      {/* 배경 장식 (히브리어/헬라어 텍스트 무늬) */}
+      <div className="fixed inset-0 pointer-events-none opacity-[0.03] overflow-hidden flex flex-wrap justify-center items-center z-0 text-3xl font-serif leading-loose break-all p-4 select-none">
         {Array(20).fill("בְּרֵאשִׁית בָּרָא אֱלֹהִים אֵת הַשָּׁמַיִם וְאֵת הָאָרֶץ Ἐν ἀρχῇ ἦν ὁ λόγος, καὶ ὁ λόγος ἦν πρὸς τὸν θεόν, καὶ θεὸς ἦν ὁ λόγος. ").join('')}
       </div>
 
       <div className="relative z-10 max-w-5xl mx-auto px-4 py-12">
-        <header className="flex items-center justify-center mb-12 space-x-4">
-          <BookOpen className="w-10 h-10 text-amber-700" />
-          <h1 className="text-4xl font-extrabold text-amber-900 tracking-tight">LEGO BIBLE</h1>
+        <header className="flex flex-col items-center justify-center mb-12 space-y-2">
+          <div className="flex items-center space-x-4">
+            <BookOpen className="w-10 h-10 text-amber-700" />
+            <h1 className="text-4xl font-extrabold text-amber-900 tracking-tight">LEGO BIBLE</h1>
+          </div>
+          <p className="text-amber-700/60 font-medium">성경 본문 연구 및 사역 자료 자동 생성 도구</p>
         </header>
 
         <div className="space-y-8">
@@ -196,7 +218,7 @@ export default function App() {
               <Search className="w-5 h-5 mr-2" /> 1. 성경 본문 선택
             </h2>
             <div className="flex flex-wrap items-end gap-4">
-              <div className="flex-1 min-w-[120px]">
+              <div className="flex-1 min-w-[150px]">
                 <label className="block text-sm font-medium text-slate-500 mb-1">성경책</label>
                 <input type="text" className="w-full p-3 bg-slate-50 border rounded-lg focus:ring-2 focus:ring-amber-500 outline-none transition-shadow" value={book} onChange={e => setBook(e.target.value)} placeholder="예: 요한복음"/>
               </div>
