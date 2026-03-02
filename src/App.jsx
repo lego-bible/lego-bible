@@ -3,6 +3,7 @@ import { BookOpen, Copy, Trash2, Search, Edit3, Loader2, FileText, CheckCircle, 
 
 /**
  * 💡 환경 변수 안전하게 가져오기
+ * 빌드 타겟 환경에 따른 호환성 문제를 방지합니다.
  */
 const getApiKey = () => {
   try {
@@ -49,7 +50,7 @@ export default function App() {
 
   /**
    * 🚀 Gemini API 호출 유틸리티
-   * [중요] 구글 REST API는 반드시 snake_case 필드명을 사용해야 합니다.
+   * [핵심] 구글 REST API 표준인 camelCase 필드명을 사용해야 합니다.
    */
   const fetchGemini = async (prompt, isJson = false) => {
     if (!apiKey) {
@@ -57,21 +58,21 @@ export default function App() {
       return null;
     }
 
-    // v1 정식 엔드포인트 사용
-    const url = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+    // JSON 모드를 가장 안정적으로 지원하는 v1beta 엔드포인트를 사용합니다.
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
     
     const systemInstruction = "당신은 깊이 있는 신학적 지식을 갖춘 전문 성경 학자이자 목회자입니다. 모든 답변은 한국어로 작성하며, 가독성 있게 단락을 구분하세요.";
     const fullPrompt = `${systemInstruction}\n\n요청사항: ${prompt}${isJson ? "\n\n반드시 결과는 다른 설명 없이 순수한 JSON 형식으로만 응답하세요." : ""}`;
 
-    // 🚨 400 Bad Request 해결: 모든 필드 이름을 snake_case로 엄격히 교정
+    // 🚨 400 Bad Request 최종 해결: 모든 필드 이름을 표준 camelCase로 교정
     const payload = {
       contents: [{
         parts: [{ text: fullPrompt }]
       }],
-      generation_config: {
+      generationConfig: {
         temperature: 0.7,
-        max_output_tokens: 4096,
-        ...(isJson ? { response_mime_type: "application/json" } : {})
+        maxOutputTokens: 4096, // 스네이크 케이스(_)가 아닌 카멜 케이스(O) 사용
+        ...(isJson ? { responseMimeType: "application/json" } : {}) // 400 에러의 주범이었던 필드명 수정
       }
     };
 
@@ -199,7 +200,7 @@ export default function App() {
       )}
 
       <div className="fixed inset-0 pointer-events-none opacity-[0.03] overflow-hidden flex flex-wrap justify-center items-center z-0 text-3xl font-serif select-none">
-        {Array(12).fill("בְּרֵ아שִׁית בָּרָא אֱלֹהִים אֵת הַשָּׁמַיִם וְאֵת הָאָרֶץ Ἐν ἀρχῇ ἦν ὁ λόγος ").join('')}
+        {Array(12).fill("בְּרֵאשִׁית בָּרָא אֱלֹהִים אֵת הַשָּׁמַיִם וְאֵת הָאָרֶץ Ἐν ἀρχῇ ἦν ὁ λόγος ").join('')}
       </div>
 
       <div className="relative z-10 max-w-5xl mx-auto px-4 py-16">
